@@ -1509,9 +1509,12 @@ void HapOut::HapStreamBuffer::flushBuffer(){
     Serial.print(buffer);         
   }
   
-  if(hapClient!=NULL){
+  if(hapClient!=NULL && hapClient->client.connected()){
+    size_t expected, written;
+
     if(!hapClient->cPair){                        // if not encrypted 
-      hapClient->client.write(buffer,num);        // transmit data buffer
+      expected=num;
+      written=hapClient->client.write(buffer,expected);        // transmit data buffer
       
     } else {                                      // if encrypted
       
@@ -1519,8 +1522,15 @@ void HapOut::HapStreamBuffer::flushBuffer(){
       encBuf[1]=num/256;
       crypto_aead_chacha20poly1305_ietf_encrypt(encBuf+2,NULL,(uint8_t *)buffer,num,encBuf,2,NULL,hapClient->a2cNonce.get(),hapClient->a2cKey);   // encrypt buffer with AAD prepended and authentication tag appended
       
-      hapClient->client.write(encBuf,num+18);     // transmit encrypted frame
-      hapClient->a2cNonce.inc();                  // increment nonce
+      expected=num+18;
+      written=hapClient->client.write(encBuf,expected);     // transmit encrypted frame
+      if(written==expected)
+        hapClient->a2cNonce.inc();                  // increment nonce only after a complete frame
+    }
+
+    if(written!=expected){
+      hapClient->client.stop();                  // a truncated HTTP message or encrypted frame cannot be continued
+      hapClient=NULL;                           // discard further output for this connection
     }
     delay(1);
   }
