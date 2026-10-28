@@ -268,7 +268,7 @@ void Span::pollTask() {
 
   while(currentClient!=hapList.end()){
     if(currentClient->client.connected()){                                   // if the client is connected
-      if(currentClient->client.available()){                                 // if client has data available
+      if(currentClient->client.available() || currentClient->input.pending()){ // also drain buffered requests and expire incomplete input
         homeSpan.lastClientIP=currentClient->client.remoteIP().toString();   // store IP Address for web logging
         currentClient->processRequest();                                     // PROCESS HAP REQUEST
         homeSpan.lastClientIP="0.0.0.0";                                     // reset stored IP address to show "0.0.0.0" if homeSpan.getClientIP() is used in any other context 

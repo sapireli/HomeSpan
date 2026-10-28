@@ -110,51 +110,36 @@ void HAPClient::init(){
 
 void HAPClient::processRequest(){
 
-  int nBytes, messageSize;
-
-  messageSize=client.available();        
-
-  if(messageSize>MAX_HTTP){                         // exceeded maximum number of bytes allowed
+  uint32_t now=millis();
+  auto result=input.receive(client,cPair!=NULL,now,[this](uint8_t *frame,size_t size){
+    if(crypto_aead_chacha20poly1305_ietf_decrypt(frame+2,NULL,NULL,frame+2,size-2,
+                                               frame,2,c2aNonce.get(),c2aKey)==-1)
+      return false;
+    c2aNonce.inc();
+    return true;
+  });
+  if(result==HAPInput::PENDING)
+    return;
+  if(result==HAPInput::INVALID){
+    input.reset();
+    LOG0("\n*** ERROR: Invalid or expired HAP input\n\n");
     badRequestError();
-    LOG0("\n*** ERROR:  HTTP message of %d bytes exceeds maximum allowed (%d)\n\n",messageSize,MAX_HTTP);
     return;
   }
- 
-  TempBuffer<uint8_t> httpBuf(messageSize+1);      // leave room for null character added below
-  
-  if(cPair){                                       // expecting encrypted message
-    LOG2("<<<< #### ");
-    LOG2(client.remoteIP());
-    LOG2(" #### <<<<\n");
+  LOG2(cPair?"<<<< #### ":"<<<<<<<<< ");
+  LOG2(client.remoteIP());
+  LOG2(cPair?" #### <<<<\n":" <<<<<<<<<\n");
 
-    nBytes=receiveEncrypted(httpBuf,messageSize);  // decrypt and return number of bytes read      
-        
-    if(!nBytes){                                   // decryption failed (error message already printed in function)
-      badRequestError();              
-      return;          
-    }
-        
-  } else {                                         // expecting plaintext message  
-    LOG2("<<<<<<<<< ");
-    LOG2(client.remoteIP());
-    LOG2(" <<<<<<<<<\n");
-    
-    nBytes=client.read(httpBuf,messageSize);       // read expected number of bytes
+  int nBytes=input.size();
+  int cLen=input.contentLength();
+  auto httpBuf=input.take(now);
 
-    if(nBytes!=messageSize || client.available()!=0){
-      badRequestError();
-      LOG0("\n*** ERROR:  HTTP message not read correctly.  Expected %d bytes, read %d bytes, %d bytes remaining\n\n",messageSize,nBytes,client.available());
-      return;
-    }
-               
-  } // encrypted/plaintext
-      
   httpBuf[nBytes]='\0';   // add null character to enable string functions
       
-  char *body=(char *)httpBuf.get();   // char pointer to start of HTTP Body
+  char *body=(char *)httpBuf.data();   // char pointer to start of HTTP Body
   char *p;                            // char pointer used for searches
      
-  if(!(p=strstr((char *)httpBuf.get(),"\r\n\r\n"))){
+  if(!(p=strstr((char *)httpBuf.data(),"\r\n\r\n"))){
     badRequestError();
     LOG0("\n*** ERROR:  Malformed HTTP request (can't find blank line indicating end of BODY)\n\n");
     return;      
@@ -162,10 +147,6 @@ void HAPClient::processRequest(){
 
   *p='\0';                            // null-terminate end of HTTP Body to faciliate additional string processing
   uint8_t *content=(uint8_t *)p+4;    // byte pointer to start of optional HTTP Content
-  int cLen=0;                         // length of optional HTTP Content
-
-  if((p=strstr(body,"Content-Length: ")))       // Content-Length is specified
-    cLen=atoi(p+16);
   if(nBytes!=strlen(body)+4+cLen){
     badRequestError();
     LOG0("\n*** ERROR:  Malformed HTTP request (Content-Length plus Body Length does not equal total number of bytes read)\n\n");
@@ -1294,41 +1275,6 @@ void HAPClient::tlvRespond(TLV8 &tlv8){
 
 //////////////////////////////////////
 
-int HAPClient::receiveEncrypted(uint8_t *httpBuf, int messageSize){
-
-  uint8_t aad[2];
-  int nBytes=0;
-
-  while(client.read(aad,2)==2){    // read initial 2-byte AAD record
-
-    int n=aad[0]+aad[1]*256;                // compute number of bytes expected in message after decoding
-
-    if(nBytes+n>messageSize){      // exceeded maximum number of bytes allowed in plaintext message
-      LOG0("\n\n*** ERROR:  Decrypted message of %d bytes exceeded maximum expected message length of %d bytes\n\n",nBytes+n,messageSize);
-      return(0);
-      }
-
-    TempBuffer<uint8_t> tBuf(n+16);      // expected number of total bytes = n bytes in encoded message + 16 bytes for appended authentication tag      
-
-    if(client.read(tBuf,tBuf.len())!=tBuf.len()){      
-      LOG0("\n\n*** ERROR: Malformed encrypted message frame\n\n");
-      return(0);      
-    }                
-
-    if(crypto_aead_chacha20poly1305_ietf_decrypt(httpBuf+nBytes, NULL, NULL, tBuf, tBuf.len(), aad, 2, c2aNonce.get(), c2aKey)==-1){
-      LOG0("\n\n*** ERROR: Can't Decrypt Message\n\n");
-      return(0);        
-    }
-
-    c2aNonce.inc();
-
-    nBytes+=n;          // increment total number of bytes in plaintext message
-    
-  } // while
-
-  return(nBytes);
-    
-} // receiveEncrypted
 
 /////////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////////

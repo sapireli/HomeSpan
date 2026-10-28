@@ -32,6 +32,7 @@
 
 #include "HomeSpan.h"
 #include "HAPConstants.h"
+#include "HAPInput.h"
 #include "HKDF.h"
 #include "SRP.h"
 
@@ -87,7 +88,7 @@ struct HAPClient {
 
   // common structures and data shared across all HAP Clients
 
-  static const int MAX_HTTP=8096;                     // max number of bytes allowed for HTTP message
+  static const int MAX_HTTP=HAPInput::MAX_HTTP;                     // max number of bytes allowed for HTTP message
   static const int MAX_CONTROLLERS=16;                // maximum number of paired controllers (HAP requires at least 16)
   static const int MAX_ACCESSORIES=150;               // maximum number of allowed Accessories (HAP limit=150)
   
@@ -97,6 +98,7 @@ struct HAPClient {
 
   // individual structures and data defined for each Hap Client connection
   
+  HAPInput input;                 // bounded, nonblocking request reassembly
   NetworkClient client;           // handle to client
   int clientNumber;               // client number
   Controller *cPair=NULL;         // pointer to info on current, session-verified Paired Controller (NULL=un-verified, and therefore un-encrypted, connection)
@@ -129,7 +131,6 @@ struct HAPClient {
   int putPrepareURL(char *json);                              // PUT /prepare (HAP Section 6.7.2.4)
 
   void tlvRespond(TLV8 &tlv8);                                // respond to client with HTTP OK header and all defined TLV data records
-  int receiveEncrypted(uint8_t *httpBuf, int messageSize);    // decrypt HTTP request (HAP Section 6.5)
 
   int notFoundError();           // return 404 error
   int badRequestError();         // return 400 error
