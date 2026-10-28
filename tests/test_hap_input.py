@@ -156,10 +156,44 @@ int main(){
  printf("coalescing, records, limits, timeout, memory, fairness, budget and allocation-failure checks passed\n");
 }
 '''
+# A small, reviewable framing test with a correctly formed Pair-Verify M1.
+# The public key is the X25519 base point. Endpoint callbacks remain stubbed:
+# this tests delivery to the dispatcher, not completion of a pairing session.
+MINIMAL_SUFFIX = r'''
+int main() {
+  std::string body("\x06\x01\x01\x03\x20", 5);
+  body += char(9);
+  body.append(31, char(0));
+  std::string message = "POST /pair-verify HTTP/1.1\r\n"
+                        "Content-Type: application/pairing+tlv8\r\n"
+                        "Content-Length: 37\r\n\r\n" + body;
+  printf("One HTTP request: %zu bytes; MAX_HTTP: %d\n", message.size(), HAPClient::MAX_HTTP);
+  int failures = 0;
+  for (size_t split : {message.size(), size_t(20), message.size()-1}) {
+    HAPClient client;
+    client.client.feed(message.substr(0, split));
+    client.processRequest();
+    bool complete = split == message.size();
+    bool prefixOK = client.client.alive && client.dispatched == (complete ? 1 : 0);
+    if (!complete && prefixOK) {
+      client.client.more(message.substr(split));
+      for (int i=0; i<20 && client.client.alive && !client.dispatched; ++i)
+        client.processRequest();
+    }
+    bool passed = prefixOK && client.client.alive && client.dispatched == 1;
+    printf("first TCP write %zu bytes: %s; HTTP400=%d; dispatched=%d\n",
+           split, passed ? "PASS" : "FAIL",
+           client.client.tx.find("400 Bad Request") != std::string::npos, client.dispatched);
+    failures += !passed;
+  }
+  return failures ? 1 : 0;
+}
+'''
+
 with tempfile.TemporaryDirectory(prefix="homespan-hap-input-") as directory:
     source = Path(directory) / "test.cpp"
     executable = Path(directory) / "test"
     legacy = function("int HAPClient::receiveEncrypted(") if "int HAPClient::receiveEncrypted(" in SOURCE else ""
-    source.write_text(PREFIX + function("void HAPClient::processRequest(){") + legacy + function("int HAPClient::badRequestError(){") + SUFFIX)
+    source.write_text(PREFIX + function("void HAPClient::processRequest(){") + legacy + function("int HAPClient::badRequestError(){") + (MINIMAL_SUFFIX if os.environ.get("HAP_TEST_MINIMAL") else SUFFIX))
     subprocess.run([os.environ.get("CXX", "c++"), "-std=c++17", *shlex.split(os.environ.get("CXXFLAGS", "")), "-I", str(ROOT / "src"), str(source), "-o", str(executable)], check=True)
     subprocess.run([str(executable)], check=True)
